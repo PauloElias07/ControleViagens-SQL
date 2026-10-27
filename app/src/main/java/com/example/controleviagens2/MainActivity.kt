@@ -32,12 +32,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -48,20 +47,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.controleviagens2.ui.theme.ControleViagens2Theme
 
-data class Viagem(
-    val data: String,
-    val kmInicial: Double,
-    val kmFinal: Double,
-    val litros: Double,
-    val valorCombustivel: Double,
-    val pedagio: Double
-) {
-    fun calcularKm(): Double = kmFinal - kmInicial
-    fun custoCombustivel(): Double = litros * valorCombustivel
-    fun custoTotal(): Double = custoCombustivel() + pedagio
-    fun mediaKmLitro(): Double = if (litros > 0) calcularKm() / litros else 0.0
-}
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,14 +54,25 @@ class MainActivity : ComponentActivity() {
         setContent {
             ControleViagens2Theme {
                 val navController = rememberNavController()
-                val viagens = remember { mutableStateListOf<Viagem>() }
+                val context = LocalContext.current
+                val repository = remember { ViagemRepository(context) }
+                var viagens by remember { mutableStateOf(repository.listar()) }
 
                 NavHost(navController = navController, startDestination = "cadastro") {
                     composable("cadastro") {
-                        CadastroScreen(navController, viagens)
+                        CadastroScreen(
+                            navController = navController,
+                            onSalvarViagem = { data, kmIni, kmFin, lit, valComb, ped ->
+                                val sucesso = repository.inserir(data, kmIni, kmFin, lit, valComb, ped)
+                                if (sucesso) {
+                                    viagens = repository.listar()
+                                }
+                                sucesso
+                            }
+                        )
                     }
                     composable("resultado") {
-                        ResultadoScreen(navController, viagens)
+                        ResultadoScreen(navController = navController, viagens = viagens)
                     }
                 }
             }
@@ -86,13 +82,17 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CadastroScreen(navController: NavController, viagens: SnapshotStateList<Viagem>) {
+fun CadastroScreen(
+    navController: NavController,
+    onSalvarViagem: (String, Double, Double, Double, Double, Double) -> Boolean
+) {
     var dataText by remember { mutableStateOf("") }
     var kmInicialText by remember { mutableStateOf("") }
     var kmFinalText by remember { mutableStateOf("") }
     var litrosText by remember { mutableStateOf("") }
     var valorCombustivelText by remember { mutableStateOf("") }
     var pedagioText by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -168,22 +168,45 @@ fun CadastroScreen(navController: NavController, viagens: SnapshotStateList<Viag
                 singleLine = true
             )
 
+            if (errorMessage != null) {
+                Text(
+                    text = errorMessage!!,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(
                 onClick = {
-                    val kmIni = kmInicialText.replace(",", ".").toDoubleOrNull() ?: 0.0
-                    val kmFin = kmFinalText.replace(",", ".").toDoubleOrNull() ?: 0.0
+                    val kmIni = kmInicialText.replace(",", ".").toDoubleOrNull()
+                    val kmFin = kmFinalText.replace(",", ".").toDoubleOrNull()
                     val lit = litrosText.replace(",", ".").toDoubleOrNull() ?: 0.0
                     val valComb = valorCombustivelText.replace(",", ".").toDoubleOrNull() ?: 0.0
                     val ped = pedagioText.replace(",", ".").toDoubleOrNull() ?: 0.0
 
-                    if (dataText.isNotBlank()) {
-                        viagens.add(Viagem(dataText, kmIni, kmFin, lit, valComb, ped))
-                        // Limpa campos para próxima inserção
-                        dataText = ""; kmInicialText = ""; kmFinalText = ""
-                        litrosText = ""; valorCombustivelText = ""; pedagioText = ""
-                        navController.navigate("resultado")
+                    when {
+                        dataText.isBlank() -> {
+                            errorMessage = "Por favor, preencha a data da viagem."
+                        }
+                        kmIni == null || kmFin == null -> {
+                            errorMessage = "Por favor, preencha o Km Inicial e o Km Final com valores válidos."
+                        }
+                        kmFin < kmIni -> {
+                            errorMessage = "O Km Final não pode ser menor que o Km Inicial."
+                        }
+                        else -> {
+                            errorMessage = null
+                            val salvo = onSalvarViagem(dataText, kmIni, kmFin, lit, valComb, ped)
+                            if (salvo) {
+                                dataText = ""; kmInicialText = ""; kmFinalText = ""
+                                litrosText = ""; valorCombustivelText = ""; pedagioText = ""
+                                navController.navigate("resultado")
+                            } else {
+                                errorMessage = "Erro ao salvar no banco de dados."
+                            }
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
